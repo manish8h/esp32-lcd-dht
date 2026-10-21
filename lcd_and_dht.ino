@@ -810,7 +810,6 @@ void handleHistory() {
   server.sendContent("");
 }
 
-
 void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   switch (event) {
     case ARDUINO_EVENT_WIFI_STA_CONNECTED:
@@ -833,46 +832,67 @@ void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   }
 }
 
-
 void checkWiFi() {
   static unsigned long disconnectedSince = 0;
-  static unsigned long lastRetry = 0;
+  static unsigned long lastAttempt = 0;
+  static bool firstAttempt = true;
 
-  const unsigned long RECONNECT_DELAY = 15000;
+  const unsigned long INITIAL_WAIT = 30000;
   const unsigned long RETRY_INTERVAL = 60000;
 
   unsigned long now = millis();
 
   if (WiFi.status() == WL_CONNECTED) {
     disconnectedSince = 0;
-    lastRetry = 0;
+    lastAttempt = 0;
+    firstAttempt = true;
     return;
   }
 
   if (disconnectedSince == 0) {
     disconnectedSince = now;
-    Serial.println("[WiFi] Connection lost. Waiting for auto reconnect...");
-  }
-
-  // Give automatic reconnect 15 seconds to recover first.
-  if (now - disconnectedSince < RECONNECT_DELAY) {
+    Serial.println("[WiFi] Disconnected. Waiting...");
     return;
   }
 
-  // Avoid repeatedly restarting connection attempts.
-  if (lastRetry != 0 && now - lastRetry < RETRY_INTERVAL) {
+  if (now - disconnectedSince < INITIAL_WAIT) {
     return;
   }
 
-  lastRetry = now;
+  if (!firstAttempt && now - lastAttempt < RETRY_INTERVAL) {
+    return;
+  }
 
-  Serial.println("[WiFi] Manual reconnect attempt...");
-  bool started = WiFi.reconnect();
+  firstAttempt = false;
+  lastAttempt = now;
 
-  Serial.printf(
-    "[WiFi] Reconnect request: %s\n",
-    started ? "accepted" : "failed"
-  );
+  Serial.println("[WiFi] Starting recovery attempt...");
+
+  // Reset the station's current connection attempt.
+  WiFi.disconnect(false, false);
+  delay(200);
+
+  WiFi.begin(ssid, password);
+}
+
+
+void scanWiFiNetworks() {
+  Serial.println("[WiFi] Scanning nearby networks...");
+
+  int count = WiFi.scanNetworks();
+
+  Serial.printf("[WiFi] Found %d networks\n", count);
+
+  for (int i = 0; i < count; i++) {
+    Serial.printf(
+      "[WiFi] SSID: %s | RSSI: %d dBm | Channel: %d\n",
+      WiFi.SSID(i).c_str(),
+      WiFi.RSSI(i),
+      WiFi.channel(i)
+    );
+  }
+
+  WiFi.scanDelete();
 }
 
 
@@ -898,7 +918,7 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
-  WiFi.setAutoReconnect(true);
+  WiFi.setAutoReconnect(false);
   WiFi.onEvent(onWiFiEvent);
   WiFi.begin(ssid, password);
 
@@ -939,6 +959,7 @@ void setup() {
   updateLCD();
 
   lastSensorRead = millis();
+  scanWiFiNetworks();
 }
 
 // ========================================
@@ -968,7 +989,7 @@ void loop() {
     Serial.println(historyCount);
   }
 
-  checkWiFi();
+  
   // Retry Wi-Fi periodically if disconnected
   // Wi-Fi connection monitoring
   static bool wasConnected = false;
@@ -992,30 +1013,32 @@ void loop() {
     wasConnected = connected;
   }
 
-// Diagnostic heartbeat every 60 seconds
-static unsigned long lastHeartbeat = 0;
+  // Diagnostic heartbeat every 60 seconds
+  static unsigned long lastHeartbeat = 0;
 
-if (millis() - lastHeartbeat >= 60000) {
-  lastHeartbeat = millis();
+  if (millis() - lastHeartbeat >= 60000) {
+    lastHeartbeat = millis();
 
-  Serial.printf(
-    "[HEARTBEAT] Uptime=%lus, WiFi=%s, FreeHeap=%u bytes\n",
-    millis() / 1000,
-    WiFi.status() == WL_CONNECTED ? "CONNECTED" : "DISCONNECTED",
-    (unsigned int)ESP.getFreeHeap());
+    Serial.printf(
+      "[HEARTBEAT] Uptime=%lus, WiFi=%s, FreeHeap=%u bytes\n",
+      millis() / 1000,
+      WiFi.status() == WL_CONNECTED ? "CONNECTED" : "DISCONNECTED",
+      (unsigned int)ESP.getFreeHeap());
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("[HEARTBEAT] IP=");
-    Serial.println(WiFi.localIP());
-  }
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.print("[HEARTBEAT] IP=");
+      Serial.println(WiFi.localIP());
+    }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("[HEARTBEAT] RSSI=");
-    Serial.print(WiFi.RSSI());
-    Serial.println(" dBm");
-  }
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.print("[HEARTBEAT] RSSI=");
+      Serial.print(WiFi.RSSI());
+      Serial.println(" dBm");
+    }
   
     Serial.print("[HEARTBEAT] WiFi status code=");
     Serial.println(WiFi.status());
-}
+  }
+
+  checkWiFi();
 }
